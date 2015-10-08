@@ -1,0 +1,178 @@
+EE51 
+Sushant Sundaresh
+1.1.2015
+
+This TOC is split into two parts: what you'll see electronically,
+and what I'll turn in. 
+
+				Electronic Program TOC
+Motors/TOC 
+Code (.asm)					(unique to Motors/UI)
+	UI-Motor board interface
+		ML 					(Motors) 	addressing, CS, init, poll loop
+		Handlers 			(Motors) 	process events, errors as they happen
+										handle resolution of errors
+		Parser 				(Motors) 	parse, execute commands
+		SerialIO 			(Motors) 	interrupt-driven IO sans handshaking 
+										except in SW for errors (see handlers)
+										only difference from SerialIO_UI:
+										PWMTimer can nest within Serial
+										interrupt handlers.
+		SerialCS 			(common) 	init for serial IO
+	Core Functions
+		Motors 				(Motors) 	calculate PWM duty cycles
+		PIOSetup 			(Motors) 	parallel io chip-setup
+		PWMTimer 			(Motors) 	200us timer interrupts
+		.trigtbl (not included)
+	Generic Functions
+		queues 				(common) 	queue data structure and accessors
+		converts 			(common) 	two useful numerical conversions
+	Setup Functions
+		IntSetup 			(common) 	base interrupt handler clearing
+		ChipSel 			(common) 	base addressing for IO space
+
+Constants (.inc, .asm)
+	Base Addressing
+		ML  				(common) 
+	Generally Useful Constants
+		GenConst 			(common)  	collected oft-used constants
+		GenTimer 			(common) 	timer constants
+		GenInts		 		(common) 	interrupt control register constants
+	Consolidated Events and Errors
+		Events 				(common) 	collected event ids, values		
+		Errors.asm 			(common) 	collected error message strings
+		Errors 				(common) 		and associated constants
+	PWM Timer/PIO Constants
+		PIOConst 			(Motors) 	parallel IO addressing constants
+		HW4Timer 			(Motors) 	PWM timer constants
+	SerialIO Constants
+		SerialCS 			(common) 	serial setup, addressing, error bits
+		Parser 				(Motors) 	parser state bits
+	Oft-used buffers, queues...
+		converts 			(common) 	conversion buffer data structure
+		queues 				(common) 	queue buffer data structure
+
+Assembly batch file
+	assemble_hw9.bat
+
+UI/TOC
+Code (.asm)
+	Motor/User UI board interface
+		ML 					(UI) 		UI main-loop - different inits
+		Handlers 			(UI) 		UI handler - includes KP mapping
+		Parser 				(UI) 		UI parser - status, not commands
+		SerialIO 			(UI) 		only difference: SerialPutChar 
+		 								cannot be interrupted by Timer2
+		SerialCS 			(common)		
+	Core Functions		
+		KPFuncs  			(UI) 		keypad functions untouched since
+										homework 5 except for constant
+										reorg
+		DFiles  			(UI) 		scrolling display functions 
+										untouched from hw4
+										except for constant reorg
+		TFiles 				(UI) 		timer functions untouched from hw4,5
+										except for setting the DB-SlowRpt-Fast
+										Rpt rates the same, and then changing
+										Timer2 priority to priority7.
+		.segtable (not included) 	
+	Generic Functions
+		queues 				(common) 	
+		converts 			(common)
+	Setup Functions
+		IntSetup 			(common)
+		ChipSel 			(common)
+
+Constants (.inc, .asm)
+	Base Addressing
+		ML  				(common)
+	Generally Useful Constants
+		GenConst 			(common)
+		GenTimer 			(common)
+		GenInts		 		(common)
+	Consolidated Events and Errors
+		Events 				(common)
+		Errors 	 			(common)
+		Errors.asm 			(common)
+		UIEvents.asm 		(UI) 		contains useful consolidated
+		 								keypad event messages and
+		 								templates for commands with variable
+		 								arguments
+	KP/Display Timer Constants
+		KPConst				(UI) 		keypad timing constants only
+		HW4Disp 			(UI) 		display scroll-length and other
+		 								such data structure related constants
+ 		HW4Timer 			(UI) 		kp/display timer priority and rate
+	SerialIO Constants
+		SerialCS 			(common) 	
+		Parser 				(common)
+	Oft-used buffers, queues...
+		converts 			(common)
+		queues 				(common)
+
+Assembly batch files
+	assemble_hw9.bat (Motors, 	hw9m when located)
+	assemble_hw9.bat (UI, 		hw9u when located)
+
+				Paper program TOC
+
+Motors/TOC 
+Code (.asm)					(unique to Motors/UI)
+	UI-Motorboard interface
+		ML 					(Motors)
+		Handlers 			(Motors) 		
+		Parser 				(Motors) 	
+		SerialIO 			(Motors/UI, with the single change 
+								between the two highlighted)
+		SerialCS 			(common)
+	Core Functions
+		Motors 				(Motors)
+		PIOSetup 			(Motors)
+		PWMTimer 			(Motors)
+
+	Motor/user UI board interface
+		ML 					(UI)
+		Handlers 			(UI) 		
+		Parser 				(UI)		
+	Core Functions		
+		KPFuncs  			(UI)
+		DFiles  			(UI)
+		TFiles 				(UI)		
+	Common files		
+		Generic Functions
+			queues 				(common)
+			converts 			(common)
+		Setup Functions
+			SerialCS 			(common)		
+			IntSetup 			(common)
+			ChipSel 			(common)
+
+Constants (.inc, .asm)
+	Base Addressing
+		ML  				(common)
+	Generally Useful Constants
+		GenConst 			(common)
+		GenTimer 			(common)
+		GenInts		 		(common)
+	Consolidated Events and Errors
+		Events 				(common)
+		Errors 				(common)
+		Errors.asm 			(common)
+		UIEvents.asm 		(UI)
+	PWM Timer/PIO Constants
+		PIOConst 			(Motors)
+		HW4Timer 			(Motors)
+	KP/Display Timer Constants
+		KPConst				(UI)
+		HW4Disp 			(UI)
+ 		HW4Timer 			(UI)
+	SerialIO Constants
+		Parser 				(common)
+		SerialCS 			(common)
+	Oft-used buffers, queues...
+		converts 			(common)
+		queues 				(common)
+
+Assembly batch files
+	assemble_hw9.bat (Motors, 	hw9m when located)
+	assemble_hw9.bat (UI, 		hw9u when located)

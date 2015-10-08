@@ -1,0 +1,426 @@
+We finally have two boards to deal with. Here's the high-level view
+of how I want them interacting:
+
+Basic UI
+The user should have the following actions available: 
+
+F Forward (0 degrees relative, same speed, effectively non-repeating key)
+R Reverse (180 degrees relative, same speed, effectively non-repeating key)
+L (Move Left) (90 degrees relative, same speed, effectively non-repeating key)
+R (Move Right) (270 degrees relative, same speed, effectively non-repeating key)
+(You'll notice my angles add CCW, consistent with my HW6 and 8.)
+
+THETA_CCW (Turn Slightly Left) Relative Increase Reference Angle +5 degrees
+			(repeating key)
+			(Reference angle is the Trike's perceived forward)
+THETA_CW (Turn Slightly Right) Relative Decrease Reference Angle -5 degrees 
+			(repeating key)
+			(Reference angle is the Trike's perceived forward)
+V_INC Relative Increase Velocity +500 (repeating key)
+V_DEC Relative Decrease Velocity -500 (repeating key)
+
+F Fire Laser (effectively non-repeating key)
+O Turn off Laser (effectively non-repeating key)
+
+Reset (ask Trike to set speed to 0, angle to 0, and 
+						reset its error state. repeating key)
+
+NOP (nothing enqueued, stay the course) (implicit) 
+
+Angles rotate indefinitely modulo 360, velocities truncate at 0, 65534.
+The motor board initializes to 0 speed, 0 direction, and although the 
+keypad both debounces and repeats events at 10Hz, a modification from
+HW5, some commands are effectively non-repeating since pressing them twice
+shouldn't induce different behavior in the Trike unless there's been an error.
+
+The user shouldn't be looking for numbers on their display. When I was a
+kid Tyco RC never had status updates on the remote - the only 
+feedback in the system was our eyes! We will parse
+status updates from the Trike, but we'll just display 
+the last command we tried to executed, and if there is any error
+(either serial, on the UI side input, or serial, reported on the
+motor board output, or command parse error, reported on the motor 
+board output) we'll let the user know. 
+
+This way, we rely on the users eyes for feedback, and the control becomes
+intuitive - pressing forward starts you forward, and you can steer with
+THETA_CCW/CW. Pressing LRB moves you off at right angles or in reverse
+relative to your current heading, but your heading is always clear in your 
+mind, and the controls now become 90-degree turn invariant from
+the user's point of view, as the user will reorient to the new forward
+almost instantly.
+
+More Choices
+Another way of saying the above is, 
+I want the FBLR keys to behave like a Gameboy direction input.
+
+Forward means along the reference direction. The problem is
+we only wrote Parser functions to interpret relative angle changes, via D.
+This, with HW6 as is, changes the "reference angle" with every command! 
+So then, holding down B would switch the actual angle +180, 360, 540, 720...
+which isn't at all what we want.
+
+The debounce/repeat rate chosen is low enough that if each command can be
+explained to the motor board in one command line (at most 8 characters, say)
+then the motor board will have parsed and executed the command in at most
+40 ms (with a 2400 baud rate, 2400bits/s = 300 char/s = 1 char/3.3 ms = 
+8 char/26.4 ms + ~4 ms execution time, say, with PWM and serial IO interrupts).
+Since status can be reported back within 9 characters, as we'll see,
+this will take at most 36 ms, so well within 100ms a command can be
+executed (and running for ~60/100ms). 
+
+So when we send a command, we expect status back before the user can even
+enter another command, (even if there's an error, it turns out). 
+
+So, technically, we could keep track of the last command we sent, 
+and the status returned, and compute what 'left' should be as a relative angle
+by remembering the 'true forward reference.' E.g.
+ 	  Forward Reference  DirMovement 	D Command Argument
+Reset 0 			  		0 			 	n/a
+F 	  0 			 		0  				0
+B     0, 					180 			180
+B 	  0, 					180 			0 
+F 	  0, 					0 				-180
+L 	  0,  					270				90
+T_CW  -5, 					265 			-5  	; check that it
+													; behaves like we intended
+...
+
+This is exactly what we'll do. 
+
+Then T_CCW/CW is essentially a one-command path (D)
+FBLR are one command paths (D)
+V_INC/DEC are one command paths (V)
+F,O are just F,O (single commands)
+and, finally,
+Reset becomes a last resort if something goes wrong with serial IO and
+	we don't know what the other board thinks its state is. It is
+	a new command (R) that takes no argument and calls SetMotorSpeed(0,0)
+	so the user can re-orient using physical cues on the Trike itself.
+
+When the motor board is given a command, it doesn't timeout. If told to
+move forward, it sets the necessary speed, direction, and lets the PWM
+timer run continuously thereafter. The user, at the UI board, can then stop
+the trike by either pressing V_INC/DEC hand holding till the speed
+truncates to 0, or by pressing reset.
+
+The motor board thus only needs command inputs of the form VDFOR0-9+-\CR. 
+We'll remove the rest from the parser.
+
+Motor Board Status Updates & Timing Considerations for Keypad DB/Repeat, IO
+There are some constraints on how fast I can run serial IO, because 
+on the motor board, I'm going to let PWM take priority in interrupts - 
+which includes nesting serial IO calls. To avoid silly errors
+like missing an Rx input, I slow down serial IO to 2400baud, or 300 char/s. 
+
+I'd really like to have 10Hz repeating for reference angle/velocity changes, 
+because it'd make for a better user experience.
+
+So I need the entirety of the motor command reception, parsing, and 
+status update to fit within 100 ms easily (so there's also time to
+let the motors settle into their new PWM cycles). This is especially 
+important as I am checking to make sure the angle status updated
+as expected - and there'll be an error otherwise! and I don't intend
+to make the variables used in those calculations write-safe, so 
+if command events stack on each other, I'll calculate my expected/observed
+angles wrong.
+
+If I try to transmit a full status update this becomes tricky - especially
+using ASCII characters. It takes more on the order of 150-200ms to be sure
+the system has transmitted the full status. 
+
+Now, since I have no intention of using the speed or laser status for anything
+and I feel the purpose of status updates was just to make sure
+the boards were really talking and could tell each other when errors
+occurred, I figure no harm done if I just transmit the angle status as 
+D(3 digits)\CR (in the same grammar) to the UI board from the Motor board
+whenever a status update is required.
+
+The velocity the user will deal with visually - we rely on their feedback
+and don't care so much what the actual number is.
+
+This means status updates happen in ~5 characters (20 ms)- and we have to 
+encode error signatures into ASCII digits to keep the same grammar if 
+we want to use the HW8 parser code and not write another parser.
+
+Motor Board Error Status Updates
+Now, the motor board will have exactly 6 error messages. It will use
+R as its error identifier, a slightly different meaning from R 
+as the reset command from the UI's perspective, but with the same intent.
+
+Grammar
+R#\CR
+where # is an ASCII digit. There will be no spaces, and no sign.
+This also holds for the D###\CR. No leading zeros, no sign, (so we need
+to write one more conversion function).
+
+; decreasing severity, mostly.
+R1\CR   Processing Error - EnqueueEvent Buffer Full
+R2\CR 	Serial Error - Parity
+R3\CR 	Serial Error - Frame
+R4\CR 	Serial Error - Break
+R5\CR 	Serial Error - Overrun
+R6\CR 	General Parsing Error
+
+Notice that with this grammar, missing the initial character could be
+unfortunate, because we would misparse and totally ignore an error. 
+So, both on the UI and Motor side, a serial error merits a 'full stop,
+reset' response.
+
+#####
+Motor Board Error Handling and Event Processing Loop 
+#####
+Interface feel: If an error occurs with a command
+transmitted to the motor board (serial or parsing) the Trike should stop and
+send an error status update immediately. It should not execute any more
+commands or send any more status updates
+till the UI board confirms it has received the error status by
+sending an R command. At this point the motor board full-resets and 
+sends a normal status update (angle 0) and life proceeds. 
+
+The UI board upon realizing an error stops taking keypad input (except
+for the R key) and displays the error message as received. 
+
+This also happens if the UI board has a serial input error - not as critical
+but no harm done by letting the user know.
+
+When the user presses the R key, the display/keypad returns to normal. This
+also means likely the user will only see the last error noted by
+either board.
+
+It's important to note the following: if there is ever an R1 error,
+an event buffer overflow, on the Motor board, the system will shut down.
+It will stop the motors, permanently, and then loop sending
+the same message to be transmitted over and over, with that error message.
+This is a catastrophic error because we cannot preserve error-time ordering
+(can't dequeue anything to enqueue the new error, as enqueue event is
+called from an sio interrupt on the motor board, and so might have just
+interrupted a call to dequeue from that same buffer. also if try to 
+set a flag, might have just interrupted a parser command parsing a previous
+error's R handshake, which would need to reset the error flag. so our
+error might be lost.). There are less drastic ways of handling this issue,
+but it is an error that means something is horribly wrong, so
+I think it's up to my discretion how obviously to let the user know I 
+screwed up.
+
+Otherwise, even in the event of multiple closely spaced serial failures, 
+short of a full serial failure, the motor board will know the exact order
+of the errors, and will tell the UI board. The UI board might miss some of 
+these due to serial input errors, but since the user is tasked with 
+resetting, the user will just keep pressing reset (then trying buttons) 
+till the Trike starts responding (in a period of error-free transmission).
+
+CLI/STI are all right because in the motor code we never turn off interrupts
+permanently - if we could make the interrupt in the first place,
+or enter the CLI/STI block at all, we know the system wasn't in an
+interrupted or masked state.
+
+A few new functions and shared variables here. 
+These belong in their own file, as they serve a different function than 
+anything else we've written.
+
+Shared Variables:
+Error_Occurred (EO), boolean byte (0 no,1 yes)
+Error_MotorReset (EMR) boolean byte (0 no, 1 yes)
+Catastrophic_Error (CE), boolean byte (0 no, 1 yes)
+EventBuffer	word queue 
+
+ReportError (no CLI/STI needed, no one tries to transmit from
+			an interrupt)
+	
+	Takes an error byte value in AL.
+	Set Error_Occurred Flag Active so we know to look for an R command.
+	Add error message to Tx queue in proper format.
+	Return.
+
+EnqueueEvent (called only from SerialIO (Motor) or SerialIO/KP (UI)
+				 interrupt handlers)
+	Takes as input in AH:AL an event ID: value. 
+
+	IDs might be.. Serial Error, SerialRx, KP (on UI boarD)/
+	not ParseError, EventBuf Full Error
+	as these are handled outside EnqueueEvent.	
+	
+	Checks if an event buffer is full. If yes:
+		On Motor Board: ignores the passed argument.
+						since serial IO on the motor board can be
+						interrupted by PWM timers, opens a CLI/STI block.
+							disables timer interrupts
+							sets parallel output bits to 0
+						exits cli/sti block
+						sets CE flag.
+						returns.
+					no matter what instruction processevents loop was
+					handling, only the pwm timers control PIO bits.
+					so motors off indefinitely now. 
+					now ProcessEvents loop 
+					will recognize CE flag on next cycle
+					and start transmitting appropriate error message 
+					never stops.
+					only recovery is a power cycle.	
+	If no, 
+		Enqueue word (ID:value) argument (not critical, only function
+			touching this queue)
+		return
+
+ProcessEvents (Motor_ML will call this repeatedly)
+	(Only function that can reset Error_Occurred Flag)
+	check CE flag.
+		if high, Transmit CE message loop
+		otherwise,	
+			Dequeue the next event from the EventBuffer.
+
+			Parse the value specially -
+				if there is an EO Flag, 
+					and the event is a serial input that is not R, ignore it. 
+						if EMR flag not set, set, setmotorspeed(0,0) without reporting status.
+					If it is R, clear the EO flag, EMR flag
+						and set the motor speed and direction to 0,0,
+						then report the status.
+				if there is no EO flag,
+					If the event type is an error, report it by calling 
+					ReportError. reset the parser state.
+	
+					Otherwise, there is no non-catastrophic error, 
+					and the input is a character-type, so parse away and execute 
+					if possible. 
+					if there is a parser error returned by parseserialchar,
+					report this error.
+
+write Handlers.TransmitStatus
+	arg buffer, input # = getMotorDirection in [0,359]
+	CALL angleStatusConverter (returns modified array, length)
+	Call SerialPutChar on the values in the returned array
+	return
+
+write angleStatusConverter - use converts functions dec2string, then
+repurpose to remove leading zeros and sign and null terminator
+and format as \CRD###\CR
+
+
+######
+UI Board Error Handling and Event Processing Loop 
+######
+	
+Shared Variables	
+Error_Occurred (EO), boolean byte (0 no,1 yes)
+Catastrophic_Error (CE), boolean byte (0 no, 1 yes)
+Wrote_CE_Message (WCE), boolean byte (0 no, 1, yes) 
+EventBuffer	word queue 
+.. and all the angle-status intent-verify variables above.
+
+EnqueueEvent
+	Called from Keypad and SerialIO interrupts
+	If EventBuffer full, 
+		ignores the passed argument.
+		sets CE flag. 
+		returns.
+	Otherwise,
+		Enqueues passed argument
+		Returns
+
+ReportError
+	Called from ProcessEvents either through ParseSerialChar
+	after parsing an error from motor, or after a serial error UI-side
+	is enqueued in the EventBuffer, or the first time the CE flag is set.
+	Takes in SI the CS:SI error code string to display (change ES)
+	display it, set EO flag, reset parser state, return.
+
+ProcessEvents if/then structure, in order:
+	if CE
+		if WCE, just return.
+		else WCE and display CE message using reporterror.
+	else if EO
+		dequeue event
+		ignore all events till keypad reset pressed then reset parser state 
+		and reset all awaiting/flags for future IO and process normally.
+	else
+		dequeue event
+		if keypad event ID	
+			keypad events 	use code table to lookup correct function to call to serialputchar commands.
+						these functions should check - if awaiting status flag high, and
+						trying to send FLBR CW CCW commands, report same error as statusD 
+						commands flbr cw ccw and r should await status.
+						fo vi vd dont care but await anyways as parser will send. more of a flag to say - command overlap!
+						does not block
+						display command called.
+		if serial UI errors report error same # scheme as for motors but diff message table. clear parser state.
+		else parse
+			parseerrors  report error  reason this is ok - timing set so commands/status reported before next keypress reported.
+			else validparse:
+			(motor error parsed  already handled by command executor )
+			(motor status parsed already handled by command executor )
+
+STATUS_D 	if awaiting status, confirm current direction matches intended. 
+			update angle-state variables. else report error.
+			if not awaiting status, report error - structured flow so
+			shouldn't be getting statuses we didn't expect, even after errors.
+
+			means - choose timing so at most one instruction per command cycle
+STATUS_R 	motor error, find appropraite error message in errors.asm and report.
+Parser (modified)
+	anything but D,R inputs are ignored. 
+	D => call STATUS_D
+	R => call STATUS_R	
+
+Confirming Angle status/calculating FBLR D command arguments.
+We'll keep track of a few numbers:
+'AwaitingAngleStatusFlag' boolean
+'ReferenceDeltaIntended'  step of CW CCW (if intended, 0 ow)
+'CurrentDirectionIntended' result after either CW CCW or FBLR (precalculated)
+'Reference' 	(current reference, add referencedelta, compare CDI with CD upon status, if refdel was not 0. if matches, then update ref)
+'CurrentDirection' (current dir, compare status with cdi if not a refdel status, update if matches.. )
+
+F,B,L,R(ight) have fixed meanings = Reference + 0, +180, +270, +90. 
+so look at currdir, calculate ref +... and calculate difference. wont overflow,
+that's the D argument. 
+
+Chip-Setup:
+.Motor Board (PIO, SIO, Timers, PACS/MPCS addressing)
+.Default priorities, allow timer nesting in SIO
+.Set SIO to 2400Baud if not already.
+.PWM Timer 200us interrupts
+
+.UI Board (Keypad, Display, SIO, PACS/MPCS addressing)
+.Timer priority below SIO priority - not a big deal if we miss those counts
+.KP/Display Timer still 1ms interrupts
+.Change debounce/slowrepeat/fastrepeat rates to 10Hz. 
+.Set SIO to 2400Baud if not already.
+
+.Need debugger to set up LCS/MCS/UCS for both.
+
+Needed Files:
+
+Motor 
+	.Converts	
+	.Queues 
+	.Serial 
+	.Motors 
+	.Parser (renamed HW8, removed unused commands. 
+			write tx-status)
+	.Handlers (the functions above)
+	.Error.asm (all error code strings from Motor's POV)
+	.Error.inc (helpful constants for Errors.asm) 
+	.Events.inc (error, serial event IDs from Motor's POV})	
+	.ML (sets up CS, interrupts, initializes all, polled-loops ProcessEvents)
+
+UI
+	.Converts
+	.Queues
+	.Display
+	.Keypad
+	.Serial cannot nest serialputchar!!! 
+	.Parser (renamed HW8) - only valid commands now R, D, interpret differently
+	.Handlers (the functions above)
+	.ML (CS, interrupts, init, polled-loops ProcessEvents)		
+	.Errors.asm (error code strings to display)
+	.UIEvents.asm (display messages for user interaction events.)
+	.Events.inc (error, serial event IDs, KP event IDs)
+		.KeyPad Codes modified - consolidated
+
+		Keypad mapping:
+		0 	1 	2 	3
+			Fo 		Reset	0
+		Le 		Ri 	LON		1
+			Ba 		LOFF 	2
+		VI  VD  CCW CW  	3
